@@ -38,9 +38,50 @@ async fn register_creates_agent() {
 
     let body: RegisterResponse = resp.json();
     assert!(body.agent_id.starts_with("dd_"));
+    assert!(body.api_key.starts_with("dd_key_"));
+    assert_eq!(body.api_key.len(), 71);
     assert_eq!(body.name, "test-agent");
     assert_eq!(body.description, "A test agent");
     assert!(body.active);
+}
+
+#[tokio::test]
+#[serial]
+async fn register_returns_unique_api_keys() {
+    let server = test_server();
+
+    let resp1: RegisterResponse = server
+        .post("/agent/register")
+        .json(&json!({"name": "agent-one", "description": "First"}))
+        .await
+        .json();
+
+    let resp2: RegisterResponse = server
+        .post("/agent/register")
+        .json(&json!({"name": "agent-two", "description": "Second"}))
+        .await
+        .json();
+
+    assert_ne!(resp1.api_key, resp2.api_key);
+}
+
+#[tokio::test]
+#[serial]
+async fn register_api_key_resolves_to_agent_id() {
+    let server = test_server();
+
+    let body: RegisterResponse = server
+        .post("/agent/register")
+        .json(&json!({"name": "auth-test", "description": "Testing auth"}))
+        .await
+        .json();
+
+    // Verify the reverse index exists by looking up the hash
+    let client = redis::Client::open("redis://127.0.0.1/0").unwrap();
+    let hash = deaddrop::auth::hash_token(&body.api_key);
+    let mut con = client.get_connection().unwrap();
+    let stored_id: String = redis::Commands::get(&mut con, format!("auth:{hash}")).unwrap();
+    assert_eq!(stored_id, body.agent_id);
 }
 
 #[tokio::test]

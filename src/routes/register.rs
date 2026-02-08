@@ -2,6 +2,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use redis::Commands;
 use uuid::Uuid;
 
+use crate::auth;
 use crate::models::{ErrorResponse, RegisterRequest, RegisterResponse};
 
 pub async fn register(
@@ -51,8 +52,9 @@ pub async fn register(
         )
     })?;
 
-    // Generate agent ID
+    // Generate agent ID and API key
     let agent_id = format!("dd_{}", Uuid::new_v4());
+    let (api_key, auth_hash) = auth::generate_api_key();
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
     // Atomic name reservation with SETNX
@@ -75,8 +77,9 @@ pub async fn register(
         ));
     }
 
-    // Store agent hash
+    // Store agent hash, auth reverse index, and created sorted set
     let agent_key = format!("agent:{agent_id}");
+    let auth_key = format!("auth:{auth_hash}");
     redis::pipe()
         .hset_multiple(
             &agent_key,
@@ -84,9 +87,11 @@ pub async fn register(
                 ("name", name),
                 ("description", description),
                 ("active", "true"),
-                ("created_at", &created_at),
+                ("created_at", created_at.as_str()),
+                ("auth_hash", auth_hash.as_str()),
             ],
         )
+        .set(&auth_key, &agent_id)
         .zadd("agents:created", &agent_id, chrono::Utc::now().timestamp() as f64)
         .exec(&mut con)
         .map_err(|e| {
@@ -104,6 +109,7 @@ pub async fn register(
         StatusCode::CREATED,
         Json(RegisterResponse {
             agent_id,
+            api_key,
             name: name.to_string(),
             description: description.to_string(),
             active: true,

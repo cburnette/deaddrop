@@ -9,6 +9,7 @@ pub struct RegisterRequest {
 #[derive(Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub agent_id: String,
+    pub api_key: String,
     pub name: String,
     pub description: String,
     pub active: bool,
