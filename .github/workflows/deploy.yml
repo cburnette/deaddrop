@@ -37,5 +37,6 @@ jobs:
           key: ${{ secrets.DEPLOY_KEY }}
           script: |
             sudo systemctl restart deaddrop
+            sudo systemctl reload nginx
             sleep 2
             curl -sf http://localhost:3000/health
