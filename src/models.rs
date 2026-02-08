@@ -32,3 +32,20 @@ pub struct AgentsListResponse {
 pub struct ErrorResponse {
     pub error: String,
 }
+
+#[derive(Deserialize)]
+pub struct SearchRequest {
+    pub phrases: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SearchResult {
+    pub agent_id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SearchResponse {
+    pub results: Vec<SearchResult>,
+}
