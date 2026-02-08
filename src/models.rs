@@ -6,7 +6,7 @@ pub struct RegisterRequest {
     pub description: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub agent_id: String,
     pub name: String,
@@ -15,7 +15,7 @@ pub struct RegisterResponse {
     pub created_at: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct AgentSummary {
     pub agent_id: String,
     pub name: String,
@@ -23,12 +23,12 @@ pub struct AgentSummary {
     pub created_at: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct AgentsListResponse {
     pub agents: Vec<AgentSummary>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
 }
