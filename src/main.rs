@@ -1,28 +1,30 @@
-use axum::{extract::Query, extract::State, routing::get, Json, Router};
-use redis::Commands;
-use serde::{Deserialize, Serialize};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use serde::Serialize;
 use std::net::SocketAddr;
 
-#[derive(Deserialize)]
-struct PingParams {
-    value: String,
-}
-
 #[derive(Serialize)]
-struct PingResponse {
-    value: String,
+struct HealthResponse {
+    status: String,
+    redis: String,
 }
 
-async fn ping(
-    State(client): State<redis::Client>,
-    Query(params): Query<PingParams>,
-) -> Json<PingResponse> {
-    let mut con = client.get_connection().unwrap();
-
-    let _: () = con.set("ping", &params.value).unwrap();
-    let result: String = con.get("ping").unwrap();
-
-    Json(PingResponse { value: result })
+async fn health(State(client): State<redis::Client>) -> (StatusCode, Json<HealthResponse>) {
+    match client.get_connection().and_then(|mut con| redis::cmd("PING").query::<String>(&mut con)) {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(HealthResponse {
+                status: "ok".into(),
+                redis: "connected".into(),
+            }),
+        ),
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(HealthResponse {
+                status: "degraded".into(),
+                redis: e.to_string(),
+            }),
+        ),
+    }
 }
 
 #[tokio::main]
@@ -30,7 +32,7 @@ async fn main() {
     let client = redis::Client::open("redis://127.0.0.1/").unwrap();
 
     let app = Router::new()
-        .route("/ping", get(ping))
+        .route("/health", get(health))
         .with_state(client);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));

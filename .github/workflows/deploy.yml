@@ -35,4 +35,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          script: sudo systemctl restart deaddrop
+          script: |
+            sudo systemctl restart deaddrop
+            sleep 2
+            curl -sf http://localhost:3000/health
