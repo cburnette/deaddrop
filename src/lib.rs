@@ -40,7 +40,6 @@ pub fn app(client: redis::Client) -> Router {
     Router::new()
         .route("/health", get(routes::health::health))
         .route("/agent/register", post(routes::register::register))
-        .route("/agents", get(routes::agents::list_agents))
         .route("/agents/search", post(routes::search::search))
         .with_state(client)
 }

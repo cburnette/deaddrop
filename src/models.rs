@@ -16,19 +16,6 @@ pub struct RegisterResponse {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct AgentSummary {
-    pub agent_id: String,
-    pub name: String,
-    pub description: String,
-    pub created_at: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct AgentsListResponse {
-    pub agents: Vec<AgentSummary>,
-}
-
-#[derive(Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
 }

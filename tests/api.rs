@@ -1,5 +1,5 @@
 use axum_test::TestServer;
-use deaddrop::models::{AgentsListResponse, ErrorResponse, RegisterResponse, SearchResponse};
+use deaddrop::models::{ErrorResponse, RegisterResponse, SearchResponse};
 use serde_json::json;
 use serial_test::serial;
 
@@ -108,46 +108,6 @@ async fn register_validates_empty_description() {
         .await;
 
     resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-#[serial]
-async fn list_agents_returns_registered() {
-    let server = test_server();
-
-    server
-        .post("/agent/register")
-        .json(&json!({"name": "agent-one", "description": "First agent"}))
-        .await
-        .assert_status(axum::http::StatusCode::CREATED);
-
-    server
-        .post("/agent/register")
-        .json(&json!({"name": "agent-two", "description": "Second agent"}))
-        .await
-        .assert_status(axum::http::StatusCode::CREATED);
-
-    let resp = server.get("/agents").await;
-    resp.assert_status_ok();
-
-    let body: AgentsListResponse = resp.json();
-    assert_eq!(body.agents.len(), 2);
-
-    let names: Vec<&str> = body.agents.iter().map(|a| a.name.as_str()).collect();
-    assert!(names.contains(&"agent-one"));
-    assert!(names.contains(&"agent-two"));
-}
-
-#[tokio::test]
-#[serial]
-async fn list_agents_empty_when_none_registered() {
-    let server = test_server();
-
-    let resp = server.get("/agents").await;
-    resp.assert_status_ok();
-
-    let body: AgentsListResponse = resp.json();
-    assert!(body.agents.is_empty());
 }
 
 // --- Search tests ---
