@@ -35,6 +35,6 @@ ufw allow 'Nginx Full'
 ufw --force enable
 
 echo "==> Obtaining SSL certificate..."
-certbot --nginx -d "${DOMAIN}" --non-interactive --agree-tos --redirect -m admin@"${DOMAIN}"
+certbot --nginx -d "${DOMAIN}" --non-interactive --agree-tos --redirect -m chadburnette@me.com
 
 echo "==> Done. Verify with: curl https://${DOMAIN}/health"
