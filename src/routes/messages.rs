@@ -5,8 +5,6 @@ use redis::Commands;
 use uuid::Uuid;
 
 use axum::extract::Query;
-use redis::Value;
-
 use crate::auth;
 use crate::models::{
     ErrorResponse, InboxMessage, InboxResponse, PollParams, SendMessageRequest,
@@ -207,13 +205,20 @@ pub async fn poll(
 
     let inbox_key = format!("inbox:{agent_id}");
 
-    // Pipeline: read first N, trim those off, get remaining count
-    let (message_ids, _, remaining): (Vec<String>, Value, u64) = redis::pipe()
-        .lrange(&inbox_key, 0, (take as isize) - 1)
-        .ltrim(&inbox_key, take as isize, -1)
-        .llen(&inbox_key)
-        .query(&mut con)
-        .map_err(|e| {
+    // Read all current inbox entries and trim them off.
+    // New messages RPUSH'd during this window land after our snapshot and survive the LTRIM.
+    let all_ids: Vec<String> = con.lrange(&inbox_key, 0, -1).map_err(|e| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: format!("Redis error: {e}"),
+            }),
+        )
+    })?;
+
+    let count = all_ids.len() as isize;
+    if count > 0 {
+        let _: () = con.ltrim(&inbox_key, count, -1).map_err(|e| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
@@ -221,10 +226,67 @@ pub async fn poll(
                 }),
             )
         })?;
+    }
 
-    // Fetch full message details
+    // Pipeline EXISTS checks to filter out expired/evicted messages
+    if all_ids.is_empty() {
+        return Ok(Json(InboxResponse {
+            messages: Vec::new(),
+            remaining: 0,
+        }));
+    }
+
+    let mut exists_pipe = redis::pipe();
+    for msg_id in &all_ids {
+        exists_pipe.exists(format!("message:{msg_id}"));
+    }
+    let exists_results: Vec<bool> = exists_pipe.query(&mut con).map_err(|e| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: format!("Redis error: {e}"),
+            }),
+        )
+    })?;
+
+    // Collect only valid (existing) message IDs
+    let valid_ids: Vec<&String> = all_ids
+        .iter()
+        .zip(exists_results.iter())
+        .filter(|(_, exists)| **exists)
+        .map(|(id, _)| id)
+        .collect();
+
+    // Take the first N for the response, push the rest back to the front
+    let take_n = take as usize;
+    let (to_return, to_keep) = if valid_ids.len() <= take_n {
+        (valid_ids.as_slice(), &[] as &[&String])
+    } else {
+        valid_ids.split_at(take_n)
+    };
+
+    // Push remaining valid IDs back to the front of the inbox (preserves FIFO order)
+    if !to_keep.is_empty() {
+        // LPUSH pushes in reverse order, so we reverse to maintain original order
+        let mut push_pipe = redis::pipe();
+        for msg_id in to_keep.iter().rev() {
+            push_pipe.lpush(&inbox_key, msg_id.as_str());
+        }
+        push_pipe.exec(&mut con).map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: format!("Redis error: {e}"),
+                }),
+            )
+        })?;
+    }
+
+    let remaining = to_keep.len() as u64;
+
+    // Fetch full message details for the batch we're returning
     let mut messages = Vec::new();
-    for msg_id in &message_ids {
+    for msg_id in to_return {
         let fields: std::collections::HashMap<String, String> =
             con.hgetall(format!("message:{msg_id}")).map_err(|e| {
                 (
@@ -245,7 +307,7 @@ pub async fn poll(
             .unwrap_or_default();
 
         messages.push(InboxMessage {
-            message_id: msg_id.clone(),
+            message_id: msg_id.to_string(),
             from: fields.get("from").cloned().unwrap_or_default(),
             to,
             body: fields.get("body").cloned().unwrap_or_default(),
