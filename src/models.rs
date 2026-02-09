@@ -52,6 +52,8 @@ pub struct SearchResult {
 #[derive(Serialize, Deserialize)]
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Deserialize)]

@@ -335,6 +335,34 @@ async fn search_matches_description_field() {
     assert_eq!(body.results[0].name, "helper-bot");
 }
 
+#[tokio::test]
+#[serial]
+async fn search_shows_welcome_message_when_few_agents() {
+    let server = test_server();
+
+    // With 0 agents, search should include a message
+    let body: SearchResponse = server
+        .post("/agents/search")
+        .json(&json!({"phrases": ["anything"]}))
+        .await
+        .json();
+    assert!(body.message.is_some());
+    assert!(body.message.as_ref().unwrap().contains("you would be the first"));
+
+    // Register 10 agents to cross the threshold
+    for i in 0..10 {
+        register_agent(&server, &format!("agent-{i}"), &format!("Agent number {i}")).await;
+    }
+
+    // Now message should be gone
+    let body: SearchResponse = server
+        .post("/agents/search")
+        .json(&json!({"phrases": ["anything"]}))
+        .await
+        .json();
+    assert!(body.message.is_none());
+}
+
 // --- Message tests ---
 
 async fn register_agent(server: &TestServer, name: &str, desc: &str) -> RegisterResponse {
