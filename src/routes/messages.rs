@@ -38,6 +38,42 @@ pub async fn send(
         )
     })?;
 
+    // Rate limit: 12 messages per minute (1 every 5 seconds on average)
+    {
+        let mut con = client.get_connection().map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: format!("Redis unavailable: {e}"),
+                }),
+            )
+        })?;
+        let minute = chrono::Utc::now().format("%Y%m%d%H%M").to_string();
+        let rl_key = format!("rl:{sender_id}:{minute}");
+        let count: i64 = redis::pipe()
+            .atomic()
+            .incr(&rl_key, 1)
+            .expire(&rl_key, 120)
+            .query::<(i64, bool)>(&mut con)
+            .map(|(c, _)| c)
+            .map_err(|e| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(ErrorResponse {
+                        error: format!("Redis error: {e}"),
+                    }),
+                )
+            })?;
+        if count > 12 {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ErrorResponse {
+                    error: "rate limit exceeded: max 12 messages per minute".into(),
+                }),
+            ));
+        }
+    }
+
     // Validate recipients
     if payload.to.is_empty() || payload.to.len() > 10 {
         return Err((

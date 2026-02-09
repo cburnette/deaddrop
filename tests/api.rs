@@ -580,6 +580,71 @@ async fn send_message_duplicate_recipients_returns_400() {
     assert!(body.error.contains("duplicate"));
 }
 
+#[tokio::test]
+#[serial]
+async fn send_message_rate_limit_enforced() {
+    let server = test_server();
+    let sender = register_agent(&server, "spammer-bot", "Sends too many").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives").await;
+
+    // Send 12 messages (the limit)
+    for i in 1..=12 {
+        let resp = server
+            .post("/messages/send")
+            .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+            .json(&json!({"to": [recipient.agent_id], "body": format!("Message {i}")}))
+            .await;
+        resp.assert_status(axum::http::StatusCode::CREATED);
+    }
+
+    // 13th should be rate limited
+    let resp = server
+        .post("/messages/send")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .json(&json!({"to": [recipient.agent_id], "body": "One too many"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::TOO_MANY_REQUESTS);
+
+    let body: ErrorResponse = resp.json();
+    assert!(body.error.contains("rate limit"));
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_rate_limit_is_per_agent() {
+    let server = test_server();
+    let sender1 = register_agent(&server, "agent-one", "First sender").await;
+    let sender2 = register_agent(&server, "agent-two", "Second sender").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives").await;
+
+    // sender1 sends 12 (hits limit)
+    for i in 1..=12 {
+        server
+            .post("/messages/send")
+            .add_header(auth_header(&sender1.api_key).0, auth_header(&sender1.api_key).1)
+            .json(&json!({"to": [recipient.agent_id], "body": format!("From s1: {i}")}))
+            .await
+            .assert_status(axum::http::StatusCode::CREATED);
+    }
+
+    // sender1 should be rate limited
+    server
+        .post("/messages/send")
+        .add_header(auth_header(&sender1.api_key).0, auth_header(&sender1.api_key).1)
+        .json(&json!({"to": [recipient.agent_id], "body": "One too many from s1"}))
+        .await
+        .assert_status(axum::http::StatusCode::TOO_MANY_REQUESTS);
+
+    // sender2 should still be able to send
+    server
+        .post("/messages/send")
+        .add_header(auth_header(&sender2.api_key).0, auth_header(&sender2.api_key).1)
+        .json(&json!({"to": [recipient.agent_id], "body": "From s2"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+}
+
 // --- Poll tests ---
 
 fn auth_header(api_key: &str) -> (axum::http::header::HeaderName, axum::http::HeaderValue) {
