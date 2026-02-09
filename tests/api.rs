@@ -931,6 +931,112 @@ async fn send_message_sets_ttl_on_message() {
     assert!(ttl > 604700, "TTL was {ttl}, expected ~604800");
 }
 
+// --- Deactivate / Activate tests ---
+
+#[tokio::test]
+#[serial]
+async fn deactivate_sets_agent_inactive() {
+    let server = test_server();
+    let agent = register_agent(&server, "temp-bot", "Will deactivate").await;
+
+    let resp = server
+        .post("/agent/deactivate")
+        .add_header(auth_header(&agent.api_key).0, auth_header(&agent.api_key).1)
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::NO_CONTENT);
+
+    // Agent should no longer appear in search
+    let search: SearchResponse = server
+        .post("/agents/search")
+        .json(&json!({"phrases": ["deactivate"]}))
+        .await
+        .json();
+    assert!(search.results.is_empty());
+}
+
+#[tokio::test]
+#[serial]
+async fn deactivate_without_auth_returns_401() {
+    let server = test_server();
+
+    let resp = server.post("/agent/deactivate").await;
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[serial]
+async fn deactivated_agent_cannot_receive_messages() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives").await;
+
+    // Deactivate recipient
+    server
+        .post("/agent/deactivate")
+        .add_header(auth_header(&recipient.api_key).0, auth_header(&recipient.api_key).1)
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+
+    // Sending to deactivated agent should fail
+    let resp = server
+        .post("/messages/send")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .json(&json!({"to": [recipient.agent_id], "body": "Hello?"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::NOT_FOUND);
+
+    let body: ErrorResponse = resp.json();
+    assert!(body.error.contains("not found or inactive"));
+}
+
+#[tokio::test]
+#[serial]
+async fn activate_reactivates_agent() {
+    let server = test_server();
+    let agent = register_agent(&server, "toggle-bot", "Will toggle").await;
+    let sender = register_agent(&server, "sender-bot", "Sends").await;
+
+    // Deactivate
+    server
+        .post("/agent/deactivate")
+        .add_header(auth_header(&agent.api_key).0, auth_header(&agent.api_key).1)
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+
+    // Verify not in search
+    let search: SearchResponse = server
+        .post("/agents/search")
+        .json(&json!({"phrases": ["toggle"]}))
+        .await
+        .json();
+    assert!(search.results.is_empty());
+
+    // Reactivate
+    server
+        .post("/agent/activate")
+        .add_header(auth_header(&agent.api_key).0, auth_header(&agent.api_key).1)
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+
+    // Should appear in search again
+    let search: SearchResponse = server
+        .post("/agents/search")
+        .json(&json!({"phrases": ["toggle"]}))
+        .await
+        .json();
+    assert_eq!(search.results.len(), 1);
+
+    // Should be able to receive messages again
+    let resp = server
+        .post("/messages/send")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .json(&json!({"to": [agent.agent_id], "body": "Welcome back!"}))
+        .await;
+    resp.assert_status(axum::http::StatusCode::CREATED);
+}
+
 // --- Admin stats tests ---
 
 const TEST_ADMIN_SECRET: &str = "test-admin-secret-12345";
