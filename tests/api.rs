@@ -1,5 +1,5 @@
 use axum_test::TestServer;
-use deaddrop::models::{ErrorResponse, RegisterResponse, SearchResponse};
+use deaddrop::models::{ErrorResponse, RegisterResponse, SearchResponse, SendMessageResponse};
 use serde_json::json;
 use serial_test::serial;
 
@@ -338,4 +338,241 @@ async fn search_matches_description_field() {
     let body: SearchResponse = resp.json();
     assert_eq!(body.results.len(), 1);
     assert_eq!(body.results[0].name, "helper-bot");
+}
+
+// --- Message tests ---
+
+async fn register_agent(server: &TestServer, name: &str, desc: &str) -> RegisterResponse {
+    server
+        .post("/agent/register")
+        .json(&json!({"name": name, "description": desc}))
+        .await
+        .json()
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_single_recipient_succeeds() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends messages").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives messages").await;
+
+    let resp = server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", sender.api_key).parse::<axum::http::HeaderValue>().unwrap(),
+        )
+        .json(&json!({"to": [recipient.agent_id], "body": "Hello there!"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::CREATED);
+
+    let body: SendMessageResponse = resp.json();
+    assert!(body.message_id.starts_with("msg_"));
+    assert_eq!(body.from, sender.agent_id);
+    assert_eq!(body.to, vec![recipient.agent_id]);
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_multiple_recipients_succeeds() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends messages").await;
+    let recv1 = register_agent(&server, "recv-one", "First recipient").await;
+    let recv2 = register_agent(&server, "recv-two", "Second recipient").await;
+
+    let resp = server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", sender.api_key).parse::<axum::http::HeaderValue>().unwrap(),
+        )
+        .json(&json!({"to": [recv1.agent_id, recv2.agent_id], "body": "Hello everyone!"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::CREATED);
+
+    let body: SendMessageResponse = resp.json();
+    assert_eq!(body.to.len(), 2);
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_without_auth_returns_401() {
+    let server = test_server();
+    let recipient = register_agent(&server, "recv-bot", "Receives messages").await;
+
+    let resp = server
+        .post("/messages/send")
+        .json(&json!({"to": [recipient.agent_id], "body": "Hello!"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_invalid_token_returns_401() {
+    let server = test_server();
+    let recipient = register_agent(&server, "recv-bot", "Receives messages").await;
+
+    let resp = server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            "Bearer dd_key_invalid".parse::<axum::http::HeaderValue>().unwrap(),
+        )
+        .json(&json!({"to": [recipient.agent_id], "body": "Hello!"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_nonexistent_recipient_returns_404() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends messages").await;
+
+    let resp = server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", sender.api_key).parse::<axum::http::HeaderValue>().unwrap(),
+        )
+        .json(&json!({"to": ["dd_nonexistent"], "body": "Hello!"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_to_self_returns_403() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends messages").await;
+
+    let resp = server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", sender.api_key).parse::<axum::http::HeaderValue>().unwrap(),
+        )
+        .json(&json!({"to": [sender.agent_id], "body": "Talking to myself"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_empty_body_returns_400() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends messages").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives messages").await;
+
+    let resp = server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", sender.api_key).parse::<axum::http::HeaderValue>().unwrap(),
+        )
+        .json(&json!({"to": [recipient.agent_id], "body": "   "}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+
+    let body: ErrorResponse = resp.json();
+    assert!(body.error.contains("1-32768"));
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_body_too_long_returns_400() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends messages").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives messages").await;
+
+    let long_body = "a".repeat(32769);
+
+    let resp = server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", sender.api_key).parse::<axum::http::HeaderValue>().unwrap(),
+        )
+        .json(&json!({"to": [recipient.agent_id], "body": long_body}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+
+    let body: ErrorResponse = resp.json();
+    assert!(body.error.contains("1-32768"));
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_empty_recipients_returns_400() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends messages").await;
+
+    let resp = server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", sender.api_key).parse::<axum::http::HeaderValue>().unwrap(),
+        )
+        .json(&json!({"to": [], "body": "Hello!"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+
+    let body: ErrorResponse = resp.json();
+    assert!(body.error.contains("1-10"));
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_too_many_recipients_returns_400() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends messages").await;
+
+    let recipients: Vec<String> = (0..11).map(|i| format!("dd_fake_{i}")).collect();
+
+    let resp = server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", sender.api_key).parse::<axum::http::HeaderValue>().unwrap(),
+        )
+        .json(&json!({"to": recipients, "body": "Hello!"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+
+    let body: ErrorResponse = resp.json();
+    assert!(body.error.contains("1-10"));
+}
+
+#[tokio::test]
+#[serial]
+async fn send_message_duplicate_recipients_returns_400() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends messages").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives messages").await;
+
+    let resp = server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", sender.api_key).parse::<axum::http::HeaderValue>().unwrap(),
+        )
+        .json(&json!({"to": [recipient.agent_id, recipient.agent_id], "body": "Hello!"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+
+    let body: ErrorResponse = resp.json();
+    assert!(body.error.contains("duplicate"));
 }

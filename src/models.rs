@@ -37,3 +37,17 @@ pub struct SearchResult {
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
 }
+
+#[derive(Deserialize)]
+pub struct SendMessageRequest {
+    pub to: Vec<String>,
+    pub body: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SendMessageResponse {
+    pub message_id: String,
+    pub from: String,
+    pub to: Vec<String>,
+    pub timestamp: String,
+}
