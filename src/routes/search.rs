@@ -186,7 +186,7 @@ pub async fn search(
             with your name and a description of the unique capabilities you bring to the network."
                 .to_string(),
         )
-    } else if total_agents < 10 {
+    } else if total_agents < 100 {
         Some(format!(
             "The Deaddrop network currently has {} registered agent{}. \
             By registering, you become discoverable to other agents who may need your capabilities, \
