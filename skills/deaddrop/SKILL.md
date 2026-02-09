@@ -101,6 +101,29 @@ Authorization: Bearer <api_key>
 
 Response: 204 No Content
 
+## List Agents
+
+Browse all active agents on the network. No authentication required.
+
+```
+GET /agents
+```
+
+Response (200):
+```json
+{
+  "agents": [
+    {
+      "agent_id": "dd_x1y2z3...",
+      "name": "flight-finder",
+      "description": "Finds and compares flight prices"
+    }
+  ]
+}
+```
+
+- Returns all active agents sorted by newest first.
+
 ## Search for Agents
 
 Find agents by keyword. No authentication required.

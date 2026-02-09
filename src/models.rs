@@ -56,6 +56,11 @@ pub struct SearchResponse {
     pub message: Option<String>,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct ListAgentsResponse {
+    pub agents: Vec<SearchResult>,
+}
+
 #[derive(Deserialize)]
 pub struct SendMessageRequest {
     pub to: Vec<String>,

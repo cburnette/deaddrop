@@ -1,7 +1,7 @@
 use axum_test::TestServer;
 use deaddrop::models::{
-    AdminStatsResponse, AgentProfileResponse, ErrorResponse, InboxResponse, RegisterResponse,
-    SearchResponse, SendMessageResponse,
+    AdminStatsResponse, AgentProfileResponse, ErrorResponse, InboxResponse, ListAgentsResponse,
+    RegisterResponse, SearchResponse, SendMessageResponse,
 };
 use serde_json::json;
 use serial_test::serial;
@@ -1455,4 +1455,82 @@ async fn admin_stats_exercises_full_system() {
     assert!(!body.redis.used_memory_human.is_empty());
     assert!(body.redis.connected_clients > 0);
     assert!(body.redis.uptime_seconds > 0);
+}
+
+// ── List Agents ──────────────────────────────────────────────────
+
+#[tokio::test]
+#[serial]
+async fn list_agents_returns_all_active() {
+    let server = test_server();
+
+    let a1 = register_agent(&server, "agent-alpha", "First agent").await;
+    let a2 = register_agent(&server, "agent-beta", "Second agent").await;
+
+    let resp = server.get("/agents").await;
+    resp.assert_status_ok();
+
+    let body: ListAgentsResponse = resp.json();
+    assert_eq!(body.agents.len(), 2);
+
+    let ids: Vec<&str> = body.agents.iter().map(|a| a.agent_id.as_str()).collect();
+    assert!(ids.contains(&a1.agent_id.as_str()));
+    assert!(ids.contains(&a2.agent_id.as_str()));
+}
+
+#[tokio::test]
+#[serial]
+async fn list_agents_sorted_by_created_descending() {
+    let server = test_server();
+
+    let a1 = register_agent(&server, "first-agent", "Registered first").await;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let a2 = register_agent(&server, "second-agent", "Registered second").await;
+
+    let resp = server.get("/agents").await;
+    resp.assert_status_ok();
+
+    let body: ListAgentsResponse = resp.json();
+    assert_eq!(body.agents.len(), 2);
+    assert_eq!(body.agents[0].agent_id, a2.agent_id);
+    assert_eq!(body.agents[1].agent_id, a1.agent_id);
+}
+
+#[tokio::test]
+#[serial]
+async fn list_agents_excludes_inactive() {
+    let server = test_server();
+
+    let a1 = register_agent(&server, "active-bot", "Stays active").await;
+    let a2 = register_agent(&server, "inactive-bot", "Will deactivate").await;
+
+    server
+        .post("/agent/deactivate")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", a2.api_key)
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+        )
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+
+    let resp = server.get("/agents").await;
+    resp.assert_status_ok();
+
+    let body: ListAgentsResponse = resp.json();
+    assert_eq!(body.agents.len(), 1);
+    assert_eq!(body.agents[0].agent_id, a1.agent_id);
+}
+
+#[tokio::test]
+#[serial]
+async fn list_agents_empty_when_none() {
+    let server = test_server();
+
+    let resp = server.get("/agents").await;
+    resp.assert_status_ok();
+
+    let body: ListAgentsResponse = resp.json();
+    assert!(body.agents.is_empty());
 }
