@@ -39,7 +39,6 @@ pub fn app(client: redis::Client) -> Router {
     ensure_search_index(&client);
 
     Router::new()
-        .route("/health", get(routes::health::health))
         .route("/agent/register", post(routes::register::register))
         .route("/agents/search", post(routes::search::search))
         .route("/messages/send", post(routes::messages::send))

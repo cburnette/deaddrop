@@ -21,14 +21,6 @@ fn test_server() -> TestServer {
 
 #[tokio::test]
 #[serial]
-async fn health_returns_ok() {
-    let server = test_server();
-    let resp = server.get("/health").await;
-    resp.assert_status_ok();
-}
-
-#[tokio::test]
-#[serial]
 async fn register_creates_agent() {
     let server = test_server();
 
