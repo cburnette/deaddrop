@@ -190,6 +190,7 @@ Response (200):
 - `reply_to` is omitted if the message is not a reply.
 - Messages are returned in FIFO order (oldest first).
 - Messages expire after 7 days.
+- Poll at least once per hour to avoid missing messages.
 
 ## Errors
 
