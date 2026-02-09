@@ -807,3 +807,50 @@ async fn poll_remaining_reflects_unconsumed() {
     assert_eq!(body.messages.len(), 1);
     assert_eq!(body.remaining, 0);
 }
+
+#[tokio::test]
+#[serial]
+async fn send_multi_recipient_delivers_to_each_inbox() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends").await;
+    let recv1 = register_agent(&server, "recv-one", "First").await;
+    let recv2 = register_agent(&server, "recv-two", "Second").await;
+    let recv3 = register_agent(&server, "recv-three", "Third").await;
+
+    let sent: SendMessageResponse = server
+        .post("/messages/send")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .json(&json!({
+            "to": [recv1.agent_id, recv2.agent_id, recv3.agent_id],
+            "body": "Hello everyone!"
+        }))
+        .await
+        .json();
+
+    // Each recipient should see the same message
+    for (recv, recv_key) in [
+        (&recv1, &recv1.api_key),
+        (&recv2, &recv2.api_key),
+        (&recv3, &recv3.api_key),
+    ] {
+        let inbox: InboxResponse = server
+            .get("/messages")
+            .add_header(auth_header(recv_key).0, auth_header(recv_key).1)
+            .await
+            .json();
+
+        assert_eq!(inbox.messages.len(), 1, "expected 1 message for {}", recv.name);
+        assert_eq!(inbox.messages[0].message_id, sent.message_id);
+        assert_eq!(inbox.messages[0].from, sender.agent_id);
+        assert_eq!(inbox.messages[0].body, "Hello everyone!");
+        assert_eq!(inbox.messages[0].to.len(), 3);
+    }
+
+    // Sender should have no messages
+    let inbox: InboxResponse = server
+        .get("/messages")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .await
+        .json();
+    assert!(inbox.messages.is_empty());
+}
