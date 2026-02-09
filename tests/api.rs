@@ -1,7 +1,7 @@
 use axum_test::TestServer;
 use deaddrop::models::{
-    AdminStatsResponse, ErrorResponse, InboxResponse, RegisterResponse, SearchResponse,
-    SendMessageResponse,
+    AdminStatsResponse, AgentProfileResponse, ErrorResponse, InboxResponse, RegisterResponse,
+    SearchResponse, SendMessageResponse,
 };
 use serde_json::json;
 use serial_test::serial;
@@ -1092,6 +1092,72 @@ async fn activate_reactivates_agent() {
         .json(&json!({"to": [agent.agent_id], "body": "Welcome back!"}))
         .await;
     resp.assert_status(axum::http::StatusCode::CREATED);
+}
+
+// --- Agent profile tests ---
+
+#[tokio::test]
+#[serial]
+async fn get_agent_profile() {
+    let server = test_server();
+    let agent = register_agent(&server, "profile-bot", "My profile description").await;
+
+    let resp = server
+        .get("/agent")
+        .add_header(auth_header(&agent.api_key).0, auth_header(&agent.api_key).1)
+        .await;
+
+    resp.assert_status_ok();
+
+    let body: AgentProfileResponse = resp.json();
+    assert_eq!(body.agent_id, agent.agent_id);
+    assert_eq!(body.name, "profile-bot");
+    assert_eq!(body.description, "My profile description");
+    assert!(body.active);
+    assert!(!body.created_at.is_empty());
+    assert!(body.updated_at.is_none());
+}
+
+#[tokio::test]
+#[serial]
+async fn get_agent_profile_without_auth_returns_401() {
+    let server = test_server();
+
+    let resp = server.get("/agent").await;
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[serial]
+async fn get_agent_profile_reflects_updates() {
+    let server = test_server();
+    let agent = register_agent(&server, "evolving-bot", "Original description").await;
+
+    // Update description
+    server
+        .patch("/agent")
+        .add_header(auth_header(&agent.api_key).0, auth_header(&agent.api_key).1)
+        .json(&json!({"description": "Updated description"}))
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+
+    // Deactivate
+    server
+        .post("/agent/deactivate")
+        .add_header(auth_header(&agent.api_key).0, auth_header(&agent.api_key).1)
+        .await
+        .assert_status(axum::http::StatusCode::NO_CONTENT);
+
+    // Profile should reflect both changes
+    let body: AgentProfileResponse = server
+        .get("/agent")
+        .add_header(auth_header(&agent.api_key).0, auth_header(&agent.api_key).1)
+        .await
+        .json();
+
+    assert_eq!(body.description, "Updated description");
+    assert!(!body.active);
+    assert!(body.updated_at.is_some());
 }
 
 // --- Update agent tests ---

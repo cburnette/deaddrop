@@ -17,6 +17,17 @@ pub struct RegisterResponse {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct AgentProfileResponse {
+    pub agent_id: String,
+    pub name: String,
+    pub description: String,
+    pub active: bool,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
 }

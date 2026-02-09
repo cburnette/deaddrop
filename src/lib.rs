@@ -2,7 +2,7 @@ pub mod auth;
 pub mod models;
 pub mod routes;
 
-use axum::routing::{get, patch, post};
+use axum::routing::{get, post};
 use axum::Router;
 
 /// Create the RediSearch index for agents (idempotent — ignores "Index already exists").
@@ -45,7 +45,7 @@ pub fn app(client: redis::Client) -> Router {
         .route("/messages", get(routes::messages::poll))
         .route("/agent/deactivate", post(routes::agent::deactivate))
         .route("/agent/activate", post(routes::agent::activate))
-        .route("/agent", patch(routes::agent::update))
+        .route("/agent", get(routes::agent::profile).patch(routes::agent::update))
         .route("/admin/stats", get(routes::admin::stats))
         .with_state(client)
 }
