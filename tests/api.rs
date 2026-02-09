@@ -858,6 +858,55 @@ async fn send_multi_recipient_delivers_to_each_inbox() {
 
 #[tokio::test]
 #[serial]
+async fn send_message_with_reply_to() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives").await;
+
+    // Send original message
+    let original: SendMessageResponse = server
+        .post("/messages/send")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .json(&json!({"to": [recipient.agent_id], "body": "Original message"}))
+        .await
+        .json();
+
+    // Recipient polls the original
+    let inbox: InboxResponse = server
+        .get("/messages")
+        .add_header(auth_header(&recipient.api_key).0, auth_header(&recipient.api_key).1)
+        .await
+        .json();
+    assert_eq!(inbox.messages.len(), 1);
+    assert!(inbox.messages[0].reply_to.is_none());
+
+    // Recipient replies with reply_to
+    let reply: SendMessageResponse = server
+        .post("/messages/send")
+        .add_header(auth_header(&recipient.api_key).0, auth_header(&recipient.api_key).1)
+        .json(&json!({
+            "to": [sender.agent_id],
+            "body": "This is my reply",
+            "reply_to": original.message_id
+        }))
+        .await
+        .json();
+
+    assert!(reply.message_id.starts_with("msg_"));
+
+    // Sender polls and sees reply_to
+    let inbox: InboxResponse = server
+        .get("/messages")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .await
+        .json();
+    assert_eq!(inbox.messages.len(), 1);
+    assert_eq!(inbox.messages[0].body, "This is my reply");
+    assert_eq!(inbox.messages[0].reply_to.as_deref(), Some(original.message_id.as_str()));
+}
+
+#[tokio::test]
+#[serial]
 async fn send_message_sets_ttl_on_message() {
     let server = test_server();
     let sender = register_agent(&server, "sender-bot", "Sends").await;

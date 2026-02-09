@@ -42,6 +42,7 @@ pub struct SearchResponse {
 pub struct SendMessageRequest {
     pub to: Vec<String>,
     pub body: String,
+    pub reply_to: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -64,6 +65,8 @@ pub struct InboxMessage {
     pub to: Vec<String>,
     pub body: String,
     pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

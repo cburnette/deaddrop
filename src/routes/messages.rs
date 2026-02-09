@@ -123,16 +123,17 @@ pub async fn send(
     let message_key = format!("message:{message_id}");
     let ttl_seconds: i64 = 7 * 24 * 60 * 60;
     let mut pipe = redis::pipe();
-    pipe.hset_multiple(
-        &message_key,
-        &[
-            ("from", sender_id.as_str()),
-            ("to", &to_json),
-            ("body", body),
-            ("timestamp", &timestamp),
-        ],
-    )
-    .expire(&message_key, ttl_seconds);
+    let mut fields: Vec<(&str, &str)> = vec![
+        ("from", sender_id.as_str()),
+        ("to", &to_json),
+        ("body", body),
+        ("timestamp", &timestamp),
+    ];
+    if let Some(ref reply_to) = payload.reply_to {
+        fields.push(("reply_to", reply_to.as_str()));
+    }
+    pipe.hset_multiple(&message_key, &fields)
+        .expire(&message_key, ttl_seconds);
     for recipient in &payload.to {
         pipe.rpush(format!("inbox:{recipient}"), &message_id);
     }
@@ -312,6 +313,7 @@ pub async fn poll(
             to,
             body: fields.get("body").cloned().unwrap_or_default(),
             timestamp: fields.get("timestamp").cloned().unwrap_or_default(),
+            reply_to: fields.get("reply_to").cloned(),
         });
     }
 
