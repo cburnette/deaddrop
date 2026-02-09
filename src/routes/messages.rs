@@ -121,8 +121,9 @@ pub async fn send(
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let to_json = serde_json::to_string(&payload.to).unwrap();
 
-    // Store message and deliver to inboxes
+    // Store message with 7-day TTL and deliver to inboxes
     let message_key = format!("message:{message_id}");
+    let ttl_seconds: i64 = 7 * 24 * 60 * 60;
     let mut pipe = redis::pipe();
     pipe.hset_multiple(
         &message_key,
@@ -132,7 +133,8 @@ pub async fn send(
             ("body", body),
             ("timestamp", &timestamp),
         ],
-    );
+    )
+    .expire(&message_key, ttl_seconds);
     for recipient in &payload.to {
         pipe.rpush(format!("inbox:{recipient}"), &message_id);
     }

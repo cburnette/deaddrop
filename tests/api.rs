@@ -856,6 +856,32 @@ async fn send_multi_recipient_delivers_to_each_inbox() {
     assert!(inbox.messages.is_empty());
 }
 
+#[tokio::test]
+#[serial]
+async fn send_message_sets_ttl_on_message() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives").await;
+
+    let sent: SendMessageResponse = server
+        .post("/messages/send")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .json(&json!({"to": [recipient.agent_id], "body": "Ephemeral message"}))
+        .await
+        .json();
+
+    // Verify TTL is set on the message key (should be ~7 days = 604800 seconds)
+    let client = redis::Client::open("redis://127.0.0.1/0").unwrap();
+    let mut con = client.get_connection().unwrap();
+    let ttl: i64 = redis::cmd("TTL")
+        .arg(format!("message:{}", sent.message_id))
+        .query(&mut con)
+        .unwrap();
+
+    // TTL should be close to 604800 (7 days), allow some margin
+    assert!(ttl > 604700, "TTL was {ttl}, expected ~604800");
+}
+
 // --- Admin stats tests ---
 
 const TEST_ADMIN_SECRET: &str = "test-admin-secret-12345";
