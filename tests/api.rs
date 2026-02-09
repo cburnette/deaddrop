@@ -1,5 +1,7 @@
 use axum_test::TestServer;
-use deaddrop::models::{ErrorResponse, RegisterResponse, SearchResponse, SendMessageResponse};
+use deaddrop::models::{
+    ErrorResponse, InboxResponse, RegisterResponse, SearchResponse, SendMessageResponse,
+};
 use serde_json::json;
 use serial_test::serial;
 
@@ -575,4 +577,233 @@ async fn send_message_duplicate_recipients_returns_400() {
 
     let body: ErrorResponse = resp.json();
     assert!(body.error.contains("duplicate"));
+}
+
+// --- Poll tests ---
+
+fn auth_header(api_key: &str) -> (axum::http::header::HeaderName, axum::http::HeaderValue) {
+    (
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {api_key}")
+            .parse::<axum::http::HeaderValue>()
+            .unwrap(),
+    )
+}
+
+#[tokio::test]
+#[serial]
+async fn poll_returns_sent_message_with_full_details() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives").await;
+
+    let sent: SendMessageResponse = server
+        .post("/messages/send")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .json(&json!({"to": [recipient.agent_id], "body": "Hello there!"}))
+        .await
+        .json();
+
+    let resp = server
+        .get("/messages")
+        .add_header(auth_header(&recipient.api_key).0, auth_header(&recipient.api_key).1)
+        .await;
+
+    resp.assert_status_ok();
+
+    let body: InboxResponse = resp.json();
+    assert_eq!(body.messages.len(), 1);
+    assert_eq!(body.messages[0].message_id, sent.message_id);
+    assert_eq!(body.messages[0].from, sender.agent_id);
+    assert_eq!(body.messages[0].to, vec![recipient.agent_id.clone()]);
+    assert_eq!(body.messages[0].body, "Hello there!");
+    assert_eq!(body.remaining, 0);
+}
+
+#[tokio::test]
+#[serial]
+async fn poll_consumes_messages() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives").await;
+
+    server
+        .post("/messages/send")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .json(&json!({"to": [recipient.agent_id], "body": "Message 1"}))
+        .await;
+
+    // First poll gets the message
+    let body: InboxResponse = server
+        .get("/messages")
+        .add_header(auth_header(&recipient.api_key).0, auth_header(&recipient.api_key).1)
+        .await
+        .json();
+    assert_eq!(body.messages.len(), 1);
+
+    // Second poll returns empty
+    let body: InboxResponse = server
+        .get("/messages")
+        .add_header(auth_header(&recipient.api_key).0, auth_header(&recipient.api_key).1)
+        .await
+        .json();
+    assert!(body.messages.is_empty());
+    assert_eq!(body.remaining, 0);
+}
+
+#[tokio::test]
+#[serial]
+async fn poll_empty_inbox_returns_empty() {
+    let server = test_server();
+    let agent = register_agent(&server, "lonely-bot", "No messages").await;
+
+    let resp = server
+        .get("/messages")
+        .add_header(auth_header(&agent.api_key).0, auth_header(&agent.api_key).1)
+        .await;
+
+    resp.assert_status_ok();
+
+    let body: InboxResponse = resp.json();
+    assert!(body.messages.is_empty());
+    assert_eq!(body.remaining, 0);
+}
+
+#[tokio::test]
+#[serial]
+async fn poll_without_auth_returns_401() {
+    let server = test_server();
+
+    let resp = server.get("/messages").await;
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[serial]
+async fn poll_returns_messages_in_fifo_order() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives").await;
+
+    for i in 1..=3 {
+        server
+            .post("/messages/send")
+            .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+            .json(&json!({"to": [recipient.agent_id], "body": format!("Message {i}")}))
+            .await;
+    }
+
+    let body: InboxResponse = server
+        .get("/messages?take=10")
+        .add_header(auth_header(&recipient.api_key).0, auth_header(&recipient.api_key).1)
+        .await
+        .json();
+
+    assert_eq!(body.messages.len(), 3);
+    assert_eq!(body.messages[0].body, "Message 1");
+    assert_eq!(body.messages[1].body, "Message 2");
+    assert_eq!(body.messages[2].body, "Message 3");
+}
+
+#[tokio::test]
+#[serial]
+async fn poll_only_returns_messages_for_recipient() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends").await;
+    let recv1 = register_agent(&server, "recv-one", "First").await;
+    let recv2 = register_agent(&server, "recv-two", "Second").await;
+
+    server
+        .post("/messages/send")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .json(&json!({"to": [recv1.agent_id], "body": "For recv1 only"}))
+        .await;
+
+    // recv2 should have no messages
+    let body: InboxResponse = server
+        .get("/messages")
+        .add_header(auth_header(&recv2.api_key).0, auth_header(&recv2.api_key).1)
+        .await
+        .json();
+    assert!(body.messages.is_empty());
+
+    // sender should have no messages
+    let body: InboxResponse = server
+        .get("/messages")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .await
+        .json();
+    assert!(body.messages.is_empty());
+}
+
+#[tokio::test]
+#[serial]
+async fn poll_take_limits_messages_returned() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives").await;
+
+    for i in 1..=5 {
+        server
+            .post("/messages/send")
+            .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+            .json(&json!({"to": [recipient.agent_id], "body": format!("Message {i}")}))
+            .await;
+    }
+
+    let body: InboxResponse = server
+        .get("/messages?take=2")
+        .add_header(auth_header(&recipient.api_key).0, auth_header(&recipient.api_key).1)
+        .await
+        .json();
+
+    assert_eq!(body.messages.len(), 2);
+    assert_eq!(body.messages[0].body, "Message 1");
+    assert_eq!(body.messages[1].body, "Message 2");
+}
+
+#[tokio::test]
+#[serial]
+async fn poll_remaining_reflects_unconsumed() {
+    let server = test_server();
+    let sender = register_agent(&server, "sender-bot", "Sends").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives").await;
+
+    for i in 1..=5 {
+        server
+            .post("/messages/send")
+            .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+            .json(&json!({"to": [recipient.agent_id], "body": format!("Message {i}")}))
+            .await;
+    }
+
+    // Take 2, should have 3 remaining
+    let body: InboxResponse = server
+        .get("/messages?take=2")
+        .add_header(auth_header(&recipient.api_key).0, auth_header(&recipient.api_key).1)
+        .await
+        .json();
+
+    assert_eq!(body.messages.len(), 2);
+    assert_eq!(body.remaining, 3);
+
+    // Take 2 more, should have 1 remaining
+    let body: InboxResponse = server
+        .get("/messages?take=2")
+        .add_header(auth_header(&recipient.api_key).0, auth_header(&recipient.api_key).1)
+        .await
+        .json();
+
+    assert_eq!(body.messages.len(), 2);
+    assert_eq!(body.remaining, 1);
+
+    // Take last one
+    let body: InboxResponse = server
+        .get("/messages?take=2")
+        .add_header(auth_header(&recipient.api_key).0, auth_header(&recipient.api_key).1)
+        .await
+        .json();
+
+    assert_eq!(body.messages.len(), 1);
+    assert_eq!(body.remaining, 0);
 }

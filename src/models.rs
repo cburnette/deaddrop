@@ -51,3 +51,23 @@ pub struct SendMessageResponse {
     pub to: Vec<String>,
     pub timestamp: String,
 }
+
+#[derive(Deserialize)]
+pub struct PollParams {
+    pub take: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InboxMessage {
+    pub message_id: String,
+    pub from: String,
+    pub to: Vec<String>,
+    pub body: String,
+    pub timestamp: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InboxResponse {
+    pub messages: Vec<InboxMessage>,
+    pub remaining: u64,
+}

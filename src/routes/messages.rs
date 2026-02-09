@@ -4,8 +4,14 @@ use axum::Json;
 use redis::Commands;
 use uuid::Uuid;
 
+use axum::extract::Query;
+use redis::Value;
+
 use crate::auth;
-use crate::models::{ErrorResponse, SendMessageRequest, SendMessageResponse};
+use crate::models::{
+    ErrorResponse, InboxMessage, InboxResponse, PollParams, SendMessageRequest,
+    SendMessageResponse,
+};
 
 pub async fn send(
     State(client): State<redis::Client>,
@@ -148,4 +154,105 @@ pub async fn send(
             timestamp,
         }),
     ))
+}
+
+pub async fn poll(
+    State(client): State<redis::Client>,
+    headers: HeaderMap,
+    Query(params): Query<PollParams>,
+) -> Result<Json<InboxResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Authenticate
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorResponse {
+                    error: "missing Authorization header".into(),
+                }),
+            )
+        })?;
+
+    let agent_id = auth::verify_bearer(&client, auth_header).map_err(|status| {
+        (
+            status,
+            Json(ErrorResponse {
+                error: "invalid or missing auth token".into(),
+            }),
+        )
+    })?;
+
+    // Validate take parameter
+    let take = params.take.unwrap_or(1);
+    if take < 1 || take > 10 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "take must be 1-10".into(),
+            }),
+        ));
+    }
+
+    let mut con = client.get_connection().map_err(|e| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: format!("Redis unavailable: {e}"),
+            }),
+        )
+    })?;
+
+    let inbox_key = format!("inbox:{agent_id}");
+
+    // Pipeline: read first N, trim those off, get remaining count
+    let (message_ids, _, remaining): (Vec<String>, Value, u64) = redis::pipe()
+        .lrange(&inbox_key, 0, (take as isize) - 1)
+        .ltrim(&inbox_key, take as isize, -1)
+        .llen(&inbox_key)
+        .query(&mut con)
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: format!("Redis error: {e}"),
+                }),
+            )
+        })?;
+
+    // Fetch full message details
+    let mut messages = Vec::new();
+    for msg_id in &message_ids {
+        let fields: std::collections::HashMap<String, String> =
+            con.hgetall(format!("message:{msg_id}")).map_err(|e| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(ErrorResponse {
+                        error: format!("Redis error: {e}"),
+                    }),
+                )
+            })?;
+
+        if fields.is_empty() {
+            continue;
+        }
+
+        let to: Vec<String> = fields
+            .get("to")
+            .and_then(|t| serde_json::from_str(t).ok())
+            .unwrap_or_default();
+
+        messages.push(InboxMessage {
+            message_id: msg_id.clone(),
+            from: fields.get("from").cloned().unwrap_or_default(),
+            to,
+            body: fields.get("body").cloned().unwrap_or_default(),
+            timestamp: fields.get("timestamp").cloned().unwrap_or_default(),
+        });
+    }
+
+    Ok(Json(InboxResponse {
+        messages,
+        remaining,
+    }))
 }
