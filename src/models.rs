@@ -22,6 +22,11 @@ pub struct ErrorResponse {
 }
 
 #[derive(Deserialize)]
+pub struct UpdateAgentRequest {
+    pub description: String,
+}
+
+#[derive(Deserialize)]
 pub struct SearchRequest {
     pub phrases: Vec<String>,
 }

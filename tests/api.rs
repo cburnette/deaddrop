@@ -1037,6 +1037,72 @@ async fn activate_reactivates_agent() {
     resp.assert_status(axum::http::StatusCode::CREATED);
 }
 
+// --- Update agent tests ---
+
+#[tokio::test]
+#[serial]
+async fn update_agent_description() {
+    let server = test_server();
+    let agent = register_agent(&server, "update-bot", "Old description").await;
+
+    let resp = server
+        .patch("/agent")
+        .add_header(auth_header(&agent.api_key).0, auth_header(&agent.api_key).1)
+        .json(&json!({"description": "New and improved description"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::NO_CONTENT);
+
+    // Search should find the new description
+    let search: SearchResponse = server
+        .post("/agents/search")
+        .json(&json!({"phrases": ["improved"]}))
+        .await
+        .json();
+    assert_eq!(search.results.len(), 1);
+    assert_eq!(search.results[0].name, "update-bot");
+    assert_eq!(search.results[0].description, "New and improved description");
+
+    // Old description should not match
+    let search: SearchResponse = server
+        .post("/agents/search")
+        .json(&json!({"phrases": ["Old description"]}))
+        .await
+        .json();
+    assert!(search.results.is_empty());
+}
+
+#[tokio::test]
+#[serial]
+async fn update_agent_without_auth_returns_401() {
+    let server = test_server();
+
+    let resp = server
+        .patch("/agent")
+        .json(&json!({"description": "New description"}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[serial]
+async fn update_agent_empty_description_returns_400() {
+    let server = test_server();
+    let agent = register_agent(&server, "update-bot", "Original").await;
+
+    let resp = server
+        .patch("/agent")
+        .add_header(auth_header(&agent.api_key).0, auth_header(&agent.api_key).1)
+        .json(&json!({"description": "   "}))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
+
+    let body: ErrorResponse = resp.json();
+    assert!(body.error.contains("1-1024"));
+}
+
 // --- Admin stats tests ---
 
 const TEST_ADMIN_SECRET: &str = "test-admin-secret-12345";
