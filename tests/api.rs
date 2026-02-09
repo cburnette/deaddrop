@@ -1,6 +1,7 @@
 use axum_test::TestServer;
 use deaddrop::models::{
-    ErrorResponse, InboxResponse, RegisterResponse, SearchResponse, SendMessageResponse,
+    AdminStatsResponse, ErrorResponse, InboxResponse, RegisterResponse, SearchResponse,
+    SendMessageResponse,
 };
 use serde_json::json;
 use serial_test::serial;
@@ -853,4 +854,195 @@ async fn send_multi_recipient_delivers_to_each_inbox() {
         .await
         .json();
     assert!(inbox.messages.is_empty());
+}
+
+// --- Admin stats tests ---
+
+const TEST_ADMIN_SECRET: &str = "test-admin-secret-12345";
+
+fn set_admin_secret() {
+    unsafe { std::env::set_var("DEADDROP_ADMIN_SECRET", TEST_ADMIN_SECRET) };
+}
+
+fn admin_auth() -> (axum::http::header::HeaderName, axum::http::HeaderValue) {
+    (
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {TEST_ADMIN_SECRET}")
+            .parse::<axum::http::HeaderValue>()
+            .unwrap(),
+    )
+}
+
+#[tokio::test]
+#[serial]
+async fn admin_stats_returns_200_with_valid_secret() {
+    set_admin_secret();
+    let server = test_server();
+
+    let resp = server
+        .get("/admin/stats")
+        .add_header(admin_auth().0, admin_auth().1)
+        .await;
+
+    resp.assert_status_ok();
+
+    let body: AdminStatsResponse = resp.json();
+    assert_eq!(body.agents.total, 0);
+    assert_eq!(body.agents.active, 0);
+    assert_eq!(body.messages.total_stored, 0);
+    assert_eq!(body.inboxes.total_queued, 0);
+    assert!(body.inboxes.busiest.is_empty());
+    assert!(body.redis.uptime_seconds > 0);
+}
+
+#[tokio::test]
+#[serial]
+async fn admin_stats_without_auth_returns_401() {
+    set_admin_secret();
+    let server = test_server();
+
+    let resp = server.get("/admin/stats").await;
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[serial]
+async fn admin_stats_wrong_secret_returns_401() {
+    set_admin_secret();
+    let server = test_server();
+
+    let resp = server
+        .get("/admin/stats")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            "Bearer wrong-secret".parse::<axum::http::HeaderValue>().unwrap(),
+        )
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[serial]
+async fn admin_stats_reflects_data() {
+    set_admin_secret();
+    let server = test_server();
+
+    // Register 2 agents
+    let sender = register_agent(&server, "sender-bot", "Sends messages").await;
+    let recipient = register_agent(&server, "recv-bot", "Receives messages").await;
+
+    // Send a message
+    server
+        .post("/messages/send")
+        .add_header(auth_header(&sender.api_key).0, auth_header(&sender.api_key).1)
+        .json(&json!({"to": [recipient.agent_id], "body": "Hello!"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+
+    let resp = server
+        .get("/admin/stats")
+        .add_header(admin_auth().0, admin_auth().1)
+        .await;
+
+    resp.assert_status_ok();
+
+    let body: AdminStatsResponse = resp.json();
+    assert_eq!(body.agents.total, 2);
+    assert_eq!(body.agents.active, 2);
+    assert_eq!(body.messages.total_stored, 1);
+    assert_eq!(body.inboxes.total_queued, 1);
+    assert_eq!(body.inboxes.busiest.len(), 1);
+    assert_eq!(body.inboxes.busiest[0].agent_id, recipient.agent_id);
+    assert_eq!(body.inboxes.busiest[0].count, 1);
+    assert_eq!(body.search_index.num_docs, 2);
+}
+
+#[tokio::test]
+#[serial]
+async fn admin_stats_exercises_full_system() {
+    set_admin_secret();
+    let server = test_server();
+
+    // Register 5 agents
+    let a1 = register_agent(&server, "alpha-bot", "Alpha agent for coordination").await;
+    let a2 = register_agent(&server, "beta-bot", "Beta agent for analysis").await;
+    let a3 = register_agent(&server, "gamma-bot", "Gamma agent for reporting").await;
+    let a4 = register_agent(&server, "delta-bot", "Delta agent for monitoring").await;
+    let a5 = register_agent(&server, "epsilon-bot", "Epsilon agent for cleanup").await;
+
+    // a1 sends 3 messages to a2
+    for i in 1..=3 {
+        server
+            .post("/messages/send")
+            .add_header(auth_header(&a1.api_key).0, auth_header(&a1.api_key).1)
+            .json(&json!({"to": [a2.agent_id], "body": format!("Message {i} to beta")}))
+            .await
+            .assert_status(axum::http::StatusCode::CREATED);
+    }
+
+    // a1 sends a multi-recipient message to a3, a4, a5
+    server
+        .post("/messages/send")
+        .add_header(auth_header(&a1.api_key).0, auth_header(&a1.api_key).1)
+        .json(&json!({"to": [a3.agent_id, a4.agent_id, a5.agent_id], "body": "Broadcast!"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+
+    // a3 sends 2 messages to a2
+    for i in 1..=2 {
+        server
+            .post("/messages/send")
+            .add_header(auth_header(&a3.api_key).0, auth_header(&a3.api_key).1)
+            .json(&json!({"to": [a2.agent_id], "body": format!("From gamma {i}")}))
+            .await
+            .assert_status(axum::http::StatusCode::CREATED);
+    }
+
+    // a2 polls 2 of their 5 messages (3 from a1 + 2 from a3)
+    let inbox: InboxResponse = server
+        .get("/messages?take=2")
+        .add_header(auth_header(&a2.api_key).0, auth_header(&a2.api_key).1)
+        .await
+        .json();
+    assert_eq!(inbox.messages.len(), 2);
+    assert_eq!(inbox.remaining, 3);
+
+    // Now check admin stats
+    let body: AdminStatsResponse = server
+        .get("/admin/stats")
+        .add_header(admin_auth().0, admin_auth().1)
+        .await
+        .json();
+
+    // 5 agents, all active
+    assert_eq!(body.agents.total, 5);
+    assert_eq!(body.agents.active, 5);
+
+    // 6 messages stored (3 + 1 broadcast + 2)
+    assert_eq!(body.messages.total_stored, 6);
+
+    // Inbox state after a2 polled 2:
+    //   a2: 3 remaining (5 - 2 polled)
+    //   a3: 1 (from broadcast)
+    //   a4: 1 (from broadcast)
+    //   a5: 1 (from broadcast)
+    //   a1: 0 (never received anything)
+    // total queued: 6
+    assert_eq!(body.inboxes.total_queued, 6);
+
+    // a2 should be the busiest with 3 remaining
+    assert_eq!(body.inboxes.busiest[0].agent_id, a2.agent_id);
+    assert_eq!(body.inboxes.busiest[0].count, 3);
+
+    // 4 agents have messages in their inbox (a2, a3, a4, a5)
+    assert_eq!(body.inboxes.busiest.len(), 4);
+
+    // Search index has all 5 agents
+    assert_eq!(body.search_index.num_docs, 5);
+
+    // Redis stats should be populated
+    assert!(!body.redis.used_memory_human.is_empty());
+    assert!(body.redis.connected_clients > 0);
+    assert!(body.redis.uptime_seconds > 0);
 }

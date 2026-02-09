@@ -44,5 +44,6 @@ pub fn app(client: redis::Client) -> Router {
         .route("/agents/search", post(routes::search::search))
         .route("/messages/send", post(routes::messages::send))
         .route("/messages", get(routes::messages::poll))
+        .route("/admin/stats", get(routes::admin::stats))
         .with_state(client)
 }

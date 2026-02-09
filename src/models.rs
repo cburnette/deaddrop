@@ -71,3 +71,47 @@ pub struct InboxResponse {
     pub messages: Vec<InboxMessage>,
     pub remaining: u64,
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct AgentStats {
+    pub total: u64,
+    pub active: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MessageStats {
+    pub total_stored: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InboxEntry {
+    pub agent_id: String,
+    pub count: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InboxStats {
+    pub total_queued: u64,
+    pub busiest: Vec<InboxEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SearchIndexStats {
+    pub num_docs: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RedisStats {
+    pub used_memory_human: String,
+    pub connected_clients: u64,
+    pub uptime_seconds: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AdminStatsResponse {
+    pub agents: AgentStats,
+    pub messages: MessageStats,
+    pub inboxes: InboxStats,
+    pub search_index: SearchIndexStats,
+    pub redis: RedisStats,
+}
