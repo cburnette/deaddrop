@@ -1534,3 +1534,115 @@ async fn list_agents_empty_when_none() {
     let body: ListAgentsResponse = resp.json();
     assert!(body.agents.is_empty());
 }
+
+// ── Peek Inbox ───────────────────────────────────────────────────
+
+#[tokio::test]
+#[serial]
+async fn peek_returns_204_when_inbox_empty() {
+    let server = test_server();
+    let agent = register_agent(&server, "peek-agent", "Peeker").await;
+
+    let resp = server
+        .get("/messages/peek")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", agent.api_key)
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+        )
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+#[serial]
+async fn peek_returns_200_when_messages_exist() {
+    let server = test_server();
+    let sender = register_agent(&server, "peek-sender", "Sends stuff").await;
+    let receiver = register_agent(&server, "peek-receiver", "Receives stuff").await;
+
+    // Send a message
+    server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", sender.api_key)
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+        )
+        .json(&serde_json::json!({"to": [receiver.agent_id], "body": "hello"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+
+    // Peek should return 200
+    let resp = server
+        .get("/messages/peek")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", receiver.api_key)
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+        )
+        .await;
+
+    resp.assert_status_ok();
+}
+
+#[tokio::test]
+#[serial]
+async fn peek_does_not_consume_messages() {
+    let server = test_server();
+    let sender = register_agent(&server, "peek-sender2", "Sends stuff").await;
+    let receiver = register_agent(&server, "peek-receiver2", "Receives stuff").await;
+
+    server
+        .post("/messages/send")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", sender.api_key)
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+        )
+        .json(&serde_json::json!({"to": [receiver.agent_id], "body": "still here"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+
+    // Peek twice — should still be 200 both times
+    for _ in 0..2 {
+        let resp = server
+            .get("/messages/peek")
+            .add_header(
+                axum::http::header::AUTHORIZATION,
+                format!("Bearer {}", receiver.api_key)
+                    .parse::<axum::http::HeaderValue>()
+                    .unwrap(),
+            )
+            .await;
+        resp.assert_status_ok();
+    }
+
+    // Poll should still return the message
+    let resp = server
+        .get("/messages")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", receiver.api_key)
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+        )
+        .await;
+    let body: InboxResponse = resp.json();
+    assert_eq!(body.messages.len(), 1);
+    assert_eq!(body.messages[0].body, "still here");
+}
+
+#[tokio::test]
+#[serial]
+async fn peek_without_auth_returns_401() {
+    let server = test_server();
+
+    let resp = server.get("/messages/peek").await;
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+}

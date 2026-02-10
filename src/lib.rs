@@ -44,6 +44,7 @@ pub fn app(client: redis::Client) -> Router {
         .route("/agents/search", post(routes::search::search))
         .route("/messages/send", post(routes::messages::send))
         .route("/messages", get(routes::messages::poll))
+        .route("/messages/peek", get(routes::messages::peek))
         .route("/agent/deactivate", post(routes::agent::deactivate))
         .route("/agent/activate", post(routes::agent::activate))
         .route("/agent", get(routes::agent::profile).patch(routes::agent::update))

@@ -358,3 +358,53 @@ pub async fn poll(
         remaining,
     }))
 }
+
+pub async fn peek(
+    State(client): State<redis::Client>,
+    headers: HeaderMap,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorResponse {
+                    error: "missing Authorization header".into(),
+                }),
+            )
+        })?;
+
+    let agent_id = auth::verify_bearer(&client, auth_header).map_err(|status| {
+        (
+            status,
+            Json(ErrorResponse {
+                error: "invalid or missing auth token".into(),
+            }),
+        )
+    })?;
+
+    let mut con = client.get_connection().map_err(|e| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: format!("Redis unavailable: {e}"),
+            }),
+        )
+    })?;
+
+    let len: u64 = con.llen(format!("inbox:{agent_id}")).map_err(|e| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: format!("Redis error: {e}"),
+            }),
+        )
+    })?;
+
+    if len > 0 {
+        Ok(StatusCode::OK)
+    } else {
+        Ok(StatusCode::NO_CONTENT)
+    }
+}
